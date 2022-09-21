@@ -3,8 +3,13 @@ package cn.edu.hitsz.compiler.lexer;
 import cn.edu.hitsz.compiler.NotImplementedException;
 import cn.edu.hitsz.compiler.symtab.SymbolTable;
 import cn.edu.hitsz.compiler.utils.FileUtils;
+import cn.edu.hitsz.compiler.ir.IRImmediate;
+import cn.edu.hitsz.compiler.ir.IRValue;
+import cn.edu.hitsz.compiler.ir.IRVariable;
+import cn.edu.hitsz.compiler.ir.Instruction;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.StreamSupport;
@@ -23,8 +28,18 @@ public class LexicalAnalyzer {
     private String code;
     private ArrayList tokens = new ArrayList<>();
 
+    private ArrayList instructions = new ArrayList<>();
+
+    private HashMap<String, Integer> id2vreg = new HashMap<String, Integer>();
+
+    private HashMap<String, Integer> vreg2ir = new HashMap<String, Integer>();
+
     public LexicalAnalyzer(SymbolTable symbolTable) {
         this.symbolTable = symbolTable;
+    }
+
+    public List<Instruction> getIR() {
+        return instructions;
     }
 
     /**
@@ -64,12 +79,19 @@ public class LexicalAnalyzer {
         tokens.add(Token.eof());
     }
 
+    public void printIR() {
+
+        for (var instr : instructions) {
+            System.out.println(instr);
+        }
+
+    }
+
     private Iterable<Token> parse_sentence(String sentence) {
 
         sentence = sentence.trim();
 
         // we assume the input is legal
-
         List<Token> token_buf = new ArrayList<Token>();
 
         if (sentence.contains("=")) {
@@ -80,10 +102,11 @@ public class LexicalAnalyzer {
 
             // we assume the id is legal
             token_buf.add(Token.normal("id", words[0]));
-
             token_buf.add(Token.simple("="));
 
             var expr = parse_expr(words[1]);
+            var result_vregid = expr2tree(expr);
+            assign_val(id2vreg.get(words[0]), result_vregid);
 
             expr.forEach(token_buf::add);
 
@@ -98,6 +121,9 @@ public class LexicalAnalyzer {
 
                 assert (words.length == 2);
 
+                vreg_id++;
+                id2vreg.put(words[1], vreg_id);
+
                 token_buf.add(Token.simple("int"));
                 token_buf.add(Token.normal("id", words[1]));
 
@@ -106,6 +132,10 @@ public class LexicalAnalyzer {
                 token_buf.add(Token.simple("return"));
 
                 var expr = parse_expr(words[1]);
+
+                var result_vregid = expr2tree(expr);
+                ret_val(result_vregid);
+
                 expr.forEach(token_buf::add);
 
             }
@@ -117,6 +147,7 @@ public class LexicalAnalyzer {
     }
 
     private Iterable<Token> parse_expr(String expr) {
+        expr = expr.replaceAll("[ ]", "");
         var symbols = List.of('(', ')', '*', '/', '+');
 
         var chars = expr.toCharArray();
@@ -189,6 +220,129 @@ public class LexicalAnalyzer {
 
         return token_buf;
 
+    }
+
+    private int vreg_id = 0;
+
+    public int expr2tree(Iterable<Token> tokens) {
+        var tokens_list = new ArrayList<Token>();
+        tokens.forEach(tokens_list::add);
+
+        // find last +/-
+
+        int last_plus_index = -1;
+        int last_multiply_index = -1;
+
+        for (int i = 0; i < tokens_list.size(); i++) {
+            if (tokens_list.get(i).getKind().getIdentifier().equals("+") ||
+                    tokens_list.get(i).getKind().getIdentifier().equals("-")) {
+                last_plus_index = i;
+            }
+
+            if (tokens_list.get(i).getKind().getIdentifier().equals("*") ||
+                    tokens_list.get(i).getKind().getIdentifier().equals("/")) {
+                last_multiply_index = i;
+
+            }
+
+            // skip bracket
+            if (tokens_list.get(i).getKind().getIdentifier().equals("(")) {
+                var left_bracket_num = 1;
+                while (left_bracket_num != 0) {
+                    i++;
+                    if (tokens_list.get(i).getKind().getIdentifier().equals(")")) {
+                        left_bracket_num--;
+                    }
+                    if (tokens_list.get(i).getKind().getIdentifier().equals("(")) {
+                        left_bracket_num++;
+                    }
+                }
+            }
+
+        }
+
+        var last_op_index = -1;
+        if (last_plus_index != -1) {
+            last_op_index = last_plus_index;
+        } else if (last_multiply_index != -1) {
+            last_op_index = last_multiply_index;
+        }
+
+        if (tokens_list.size() == 1) {
+            // the expr is a number/id
+            // both id and const can be process this way
+            var token = tokens_list.get(0);
+
+            if (token.getKindId().equals("id")) {
+                int vreg = id2vreg.get(token.getText());
+                return vreg;
+            } else {
+
+                // if the token is a intconst, we creae a vreg for it
+                vreg_id++;
+                assign_imm(vreg_id, Integer.parseInt(tokens_list.get(0).getText()));
+                return vreg_id;
+            }
+
+        } else if (last_op_index == -1) {
+            // the expr is prime, remove the bracket around it
+            return expr2tree(tokens_list.subList(1, tokens_list.size() - 1));
+
+        } else {
+            var lhs = expr2tree(tokens_list.subList(0, last_op_index));
+            var rhs = expr2tree(tokens_list.subList(last_op_index + 1, tokens_list.size()));
+
+            vreg_id++;
+            var op = tokens_list.get(last_op_index).getKind().getIdentifier();
+            arith(vreg_id, lhs, rhs, op);
+            return vreg_id;
+
+        }
+
+    }
+
+    private void arith(int ddst, int ssrc1, int ssrc2, String op) {
+        var dst = IRVariable.named("" + ddst);
+        var src1 = IRVariable.named("" + ssrc1);
+        var src2 = IRVariable.named("" + ssrc2);
+        Instruction instr = null;
+        switch (op) {
+            case "+":
+                instr = Instruction.createAdd(dst, src1, src2);
+                break;
+            case "*":
+                instr = Instruction.createMul(dst, src1, src2);
+                break;
+            case "-":
+                instr = Instruction.createSub(dst, src1, src2);
+                break;
+            default:
+                throw new RuntimeException("");
+
+        }
+
+        instructions.add(instr);
+
+    }
+
+    private void assign_imm(int vreg_id, int value) {
+        var imm = IRImmediate.of(value);
+        var result = IRVariable.named("" + vreg_id);
+        var instr = Instruction.createMov(result, imm);
+        instructions.add(instr);
+    }
+
+    private void assign_val(int ddst, int ssrc) {
+        var dest = IRVariable.named("" + ddst);
+        var src = IRVariable.named("" + ssrc);
+        var instr = Instruction.createMov(dest, src);
+        instructions.add(instr);
+    }
+
+    private void ret_val(int ssrc) {
+        var src = IRVariable.named("" + ssrc);
+        var instr = Instruction.createRet(src);
+        instructions.add(instr);
     }
 
     /**

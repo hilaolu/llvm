@@ -1,10 +1,15 @@
 package cn.edu.hitsz.compiler.asm;
 
 import cn.edu.hitsz.compiler.NotImplementedException;
+import cn.edu.hitsz.compiler.ir.IRImmediate;
+import cn.edu.hitsz.compiler.ir.IRValue;
+import cn.edu.hitsz.compiler.ir.IRVariable;
 import cn.edu.hitsz.compiler.ir.Instruction;
+import cn.edu.hitsz.compiler.ir.InstructionKind;
+import cn.edu.hitsz.compiler.utils.FileUtils;
 
+import java.util.ArrayList;
 import java.util.List;
-
 
 /**
  * TODO: 实验四: 实现汇编生成
@@ -22,6 +27,8 @@ import java.util.List;
  */
 public class AssemblyGenerator {
 
+    private ArrayList<String> asmcode = new ArrayList();
+
     /**
      * 加载前端提供的中间代码
      * <br>
@@ -32,9 +39,55 @@ public class AssemblyGenerator {
      */
     public void loadIR(List<Instruction> originInstructions) {
         // TODO: 读入前端提供的中间代码并生成所需要的信息
-        throw new NotImplementedException();
-    }
+        for (var instr : originInstructions) {
+            if (instr.getKind().equals(InstructionKind.MOV)) {
+                if (instr.getFrom() instanceof IRImmediate imm) {
+                    var asm_instr = load_imm(Integer.parseInt(instr.getResult().getName()), imm.getValue());
+                    asm_instr.forEach(asmcode::add);
+                } else if (instr.getFrom() instanceof IRVariable val) {
+                    var asm_instr = mv(
+                            Integer.parseInt(instr.getResult().getName()),
+                            Integer.parseInt(val.getName()));
+                    asm_instr.forEach(asmcode::add);
+                }
 
+            } else if (instr.getKind().equals(InstructionKind.RET)) {
+                if (instr.getReturnValue() instanceof IRVariable val) {
+                    var asm_instr = ret(Integer.parseInt(val.getName()));
+                    asm_instr.forEach(asmcode::add);
+                } else {
+                    throw new RuntimeException("");
+                }
+
+            } else {
+                if (instr.getLHS() instanceof IRVariable lhs &&
+                        instr.getRHS() instanceof IRVariable rhs) {
+                    String op = "";
+                    if (instr.getKind().equals(InstructionKind.MUL)) {
+                        op = "mul";
+                    } else if (instr.getKind().equals(InstructionKind.SUB)) {
+                        op = "sub";
+                    } else if (instr.getKind().equals(InstructionKind.ADD)) {
+                        op = "add";
+                    } else {
+                        throw new RuntimeException("");
+                    }
+
+                    var asm_instr = arith(Integer.parseInt(instr.getResult().getName()),
+                            Integer.parseInt(lhs.getName()),
+                            Integer.parseInt(rhs.getName()),
+                            op);
+                    asm_instr.forEach(asmcode::add);
+
+                } else {
+                    throw new RuntimeException("");
+                }
+
+            }
+
+        }
+
+    }
 
     /**
      * 执行代码生成.
@@ -47,9 +100,55 @@ public class AssemblyGenerator {
      */
     public void run() {
         // TODO: 执行寄存器分配与代码生成
-        throw new NotImplementedException();
+        // throw new NotImplementedException();
     }
 
+    private int getVregMemAddr(int vregid) {
+        return vregid * 4;
+    }
+
+    private String pop(int vregid, int pregid) {
+        return "lw " + "x" + pregid + "," + getVregMemAddr(vregid) + "(x0)";
+    }
+
+    private String push(int vregid, int pregid) {
+        return "sw " + "x" + pregid + "," + getVregMemAddr(vregid) + "(x0)";
+    }
+
+    private List<String> load_imm(int vregid, int imm) {
+        var result = new ArrayList();
+        var pregid = 10;
+        result.add("li x" + pregid + "," + imm);
+        result.add(push(vregid, pregid));
+        return result;
+    }
+
+    private List<String> mv(int ddst, int ssrc) {
+        var result = new ArrayList();
+        var pregid = 11;
+        result.add(pop(ssrc, pregid));
+        result.add(push(ddst, pregid));
+        return result;
+    }
+
+    private List<String> arith(int ddst, int ssrc1, int ssrc2, String op) {
+        var result = new ArrayList();
+        var pregid1 = 10;
+        var pregid2 = 11;
+        result.add(pop(ssrc1, pregid1));
+        result.add(pop(ssrc2, pregid2));
+        var arith_instr = op + " x" + pregid1 + ",x" + pregid1 + ",x" + pregid2;
+        result.add(arith_instr);
+        result.add(push(ddst, pregid1));
+        return result;
+    }
+
+    private List<String> ret(int ssrc) {
+        var result = new ArrayList();
+        var pregid = 10; // a0
+        result.add(pop(ssrc, pregid));
+        return result;
+    }
 
     /**
      * 输出汇编代码到文件
@@ -57,8 +156,7 @@ public class AssemblyGenerator {
      * @param path 输出文件路径
      */
     public void dump(String path) {
-        // TODO: 输出汇编代码到文件
-        throw new NotImplementedException();
+
+        FileUtils.writeLines(path, asmcode);
     }
 }
-
