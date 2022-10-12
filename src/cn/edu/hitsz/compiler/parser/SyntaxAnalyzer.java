@@ -2,13 +2,16 @@ package cn.edu.hitsz.compiler.parser;
 
 import cn.edu.hitsz.compiler.NotImplementedException;
 import cn.edu.hitsz.compiler.lexer.Token;
+import cn.edu.hitsz.compiler.parser.table.Action;
 import cn.edu.hitsz.compiler.parser.table.LRTable;
 import cn.edu.hitsz.compiler.parser.table.Production;
 import cn.edu.hitsz.compiler.parser.table.Status;
 import cn.edu.hitsz.compiler.symtab.SymbolTable;
+import cn.edu.hitsz.compiler.parser.table.NonTerminal;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Stack;
 
 //TODO: 实验二: 实现 LR 语法分析驱动程序
 
@@ -23,7 +26,6 @@ import java.util.List;
 public class SyntaxAnalyzer {
     private final SymbolTable symbolTable;
     private final List<ActionObserver> observers = new ArrayList<>();
-
 
     public SyntaxAnalyzer(SymbolTable symbolTable) {
         this.symbolTable = symbolTable;
@@ -74,26 +76,122 @@ public class SyntaxAnalyzer {
         }
     }
 
-    public void loadTokens(Iterable<Token> tokens) {
+    private ArrayList<Token> tokens = new ArrayList<>();
+
+    public void loadTokens(Iterable<Token> tokens_) {
+        tokens_.forEach(tokens::add);
         // TODO: 加载词法单元
         // 你可以自行选择要如何存储词法单元, 譬如使用迭代器, 或是栈, 或是干脆使用一个 list 全存起来
         // 需要注意的是, 在实现驱动程序的过程中, 你会需要面对只读取一个 token 而不能消耗它的情况,
         // 在自行设计的时候请加以考虑此种情况
-        throw new NotImplementedException();
+        // throw new NotImplementedException();
     }
 
-    public void loadLRTable(LRTable table) {
+    private LRTable table = null;
+    private Status init_status = null;
+
+    public void loadLRTable(LRTable table_) {
+        table = table_;
+        init_status = table_.getInit();
         // TODO: 加载 LR 分析表
         // 你可以自行选择要如何使用该表格:
         // 是直接对 LRTable 调用 getAction/getGoto, 抑或是直接将 initStatus 存起来使用
-        throw new NotImplementedException();
+        // throw new NotImplementedException();
     }
 
     public void run() {
         // TODO: 实现驱动程序
         // 你需要根据上面的输入来实现 LR 语法分析的驱动程序
-        // 请分别在遇到 Shift, Reduce, Accept 的时候调用上面的 callWhenInShift, callWhenInReduce, callWhenInAccept
+        // 请分别在遇到 Shift, Reduce, Accept 的时候调用上面的 callWhenInShift, callWhenInReduce,
+        // callWhenInAccept
         // 否则用于为实验二打分的产生式输出可能不会正常工作
-        throw new NotImplementedException();
+        Stack<Symbol> symbols = new Stack();
+        Stack<Status> stack = new Stack();
+        stack.push(init_status);
+        while (true) {
+
+            var token = tokens.get(0);
+            var status = stack.peek();
+            var action = table.getAction(status, token);
+
+            switch (action.getKind()) {
+
+                case Shift -> {
+                    final var shiftTo = action.getStatus();
+
+                    symbols.push(new Symbol(token));
+                    tokens.remove(0);
+                    stack.push(shiftTo);
+
+                    callWhenInShift(init_status, token);
+                    break;
+                }
+
+                case Reduce -> {
+                    final var production = action.getProduction();
+
+                    var new_non_terminal = new NonTerminal(production.toString().split("->", 0)[0].trim());
+
+                    var t = production.toString().split("->", 0)[1].trim();
+                    for (var _t : t.split(" ", 0)) {
+                        symbols.pop();
+                        stack.pop();
+                    }
+
+                    status = stack.peek();
+                    var shiftTo = table.getGoto(status, new_non_terminal);
+                    if (shiftTo.toString().equals("-1")) {
+                        throw new RuntimeException("invalid status");
+                    }
+
+                    stack.add(shiftTo);
+
+                    symbols.push(new Symbol(new_non_terminal));
+
+                    callWhenInReduce(init_status, production);
+                    break;
+                }
+
+                case Accept -> {
+                    callWhenInAccept(init_status);
+                    return;
+                }
+
+                case Error -> {
+                    throw new NotImplementedException();
+                }
+            }
+
+        }
+
+    }
+}
+
+class Symbol {
+
+    Token token;
+    NonTerminal nonTerminal;
+
+    private Symbol(Token token, NonTerminal nonTerminal) {
+        this.token = token;
+        this.nonTerminal = nonTerminal;
+    }
+
+    public Symbol(Token token) {
+        this.token = token;
+        this.nonTerminal = null;
+    }
+
+    public Symbol(NonTerminal nonTerminal) {
+        this.token = null;
+        this.nonTerminal = nonTerminal;
+    }
+
+    public Boolean isToken() {
+        return this.token != null;
+    }
+
+    public Boolean isNonterminal() {
+        return this.nonTerminal != null;
     }
 }
